@@ -1,0 +1,46 @@
+spring:
+  application:
+    name: api-gateway
+
+  cloud:
+    gateway:
+      # Server-routes is the modern (Boot 3.x) configuration. Each route declares a
+      # path predicate (which incoming requests match) and a URI target (where to send them).
+      # The URIs are parameterized so docker-compose can override them with container DNS
+      # names (e.g. http://account-service:8081) while local dev keeps using localhost.
+      server:
+        webflux:
+          routes:
+            - id: account-service
+              uri: ${ACCOUNT_SERVICE_URI:http://localhost:8081}
+              predicates:
+                - Path=/accounts/**
+
+            - id: transaction-service
+              uri: ${TRANSACTION_SERVICE_URI:http://localhost:8082}
+              predicates:
+                - Path=/transfers/**
+
+            - id: notification-service
+              uri: ${NOTIFICATION_SERVICE_URI:http://localhost:8083}
+              predicates:
+                - Path=/notifications/**
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+
+logging:
+  level:
+    # Helps when verifying routes locally — shows which route a request matched.
+    org.springframework.cloud.gateway.handler.RoutePredicateHandlerMapping: INFO
