@@ -1,0 +1,31 @@
+# AKS values for api-gateway. Differs from the other three services in two ways:
+#   1. No DB / Kafka — gateway is stateless, just routes to downstream services.
+#   2. service.type=LoadBalancer — Azure provisions a public IP automatically;
+#      this is how the saga is exercised from outside the cluster.
+
+name: api-gateway
+port: 8080
+
+config:
+  # In-cluster DNS — same as kind, same as compose. Service discovery via
+  # the K8s Service we install for each downstream.
+  ACCOUNT_SERVICE_URI: "http://account-service:8081"
+  TRANSACTION_SERVICE_URI: "http://transaction-service:8082"
+  NOTIFICATION_SERVICE_URI: "http://notification-service:8083"
+
+# Public exposure — Azure spins up a Load Balancer + public IP.
+# Costs ~€2/mo for the static IP; trivial.
+service:
+  type: LoadBalancer
+
+# Gateway doesn't need workload identity (no Azure resources to authenticate to).
+azureWorkloadIdentity:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

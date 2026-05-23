@@ -1,0 +1,59 @@
+# AKS values for account-service.
+#
+# Dynamic values that depend on Terraform outputs (ACR login server, Postgres
+# FQDN, Event Hubs bootstrap, workload-identity client_id) are passed via
+# --set on the `helm install` command line — see deploy/Makefile's `aks-*`
+# targets. Static values that don't change between AKS installs live here.
+
+name: account-service
+# image.repository is filled in by Makefile from `terraform output acr_login_server`
+port: 8081
+
+config:
+  # Static URL pieces that don't depend on Terraform outputs. The {{PG_FQDN}}
+  # and {{EH_BOOTSTRAP}} placeholders are substituted by Makefile via --set.
+  SPRING_DATASOURCE_USERNAME: "flexhub"
+  # SSL required for Postgres Flexible Server connections from outside the VNet.
+  # currentSchema selects the per-service schema (Flyway will create on first start).
+  # The full URL is built by Makefile because PG_FQDN comes from terraform output.
+
+  # Event Hubs Kafka SASL config. Same Spring Kafka client, three properties more.
+  SPRING_KAFKA_PROPERTIES_SECURITY_PROTOCOL: "SASL_SSL"
+  SPRING_KAFKA_PROPERTIES_SASL_MECHANISM: "PLAIN"
+  # SPRING_KAFKA_BOOTSTRAP_SERVERS and SPRING_KAFKA_PROPERTIES_SASL_JAAS_CONFIG
+  # are set by Makefile (both depend on Event Hubs namespace name).
+
+envFromSecret:
+  # Postgres password — from the Bitnami Postgres chart's auto-generated
+  # Secret (same pattern as the kind setup). Free-trial restrictions blocked
+  # managed Flexible Server; this is the workaround. Restore a Key Vault
+  # secret reference here once the subscription is upgraded.
+  - name: SPRING_DATASOURCE_PASSWORD
+    secretName: postgres-postgresql
+    key: password
+  # Full SASL JAAS config string (contains the Event Hubs SAS connection string
+  # as the "password"). Spring Kafka reads SPRING_KAFKA_PROPERTIES_SASL_JAAS_CONFIG
+  # and uses it verbatim when constructing the producer/consumer.
+  - name: SPRING_KAFKA_PROPERTIES_SASL_JAAS_CONFIG
+    secretName: flexhub-secrets
+    key: eventhubs-jaas-config
+
+# Workload identity wired into the chart (ServiceAccount + pod label) — the
+# pod CAN authenticate to Azure resources via federated OIDC. We still
+# bootstrap k8s Secrets from Key Vault via script rather than have pods call
+# Key Vault at startup; the workload identity is in place for future use
+# (cert rotation, dynamic secret reloading via the Secrets Store CSI driver).
+azureWorkloadIdentity:
+  enabled: true
+  # clientId is filled in by Makefile from `terraform output workload_identity_client_id`
+
+# In AKS we tune resource requests slightly higher since the node SKU has
+# more headroom than kind's container-in-container setup. Same memory profile;
+# CPU bumped a touch for faster startup.
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

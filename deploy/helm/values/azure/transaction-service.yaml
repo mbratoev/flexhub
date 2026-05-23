@@ -1,0 +1,36 @@
+# AKS values for transaction-service. See azure/account-service.yaml for
+# the rationale on what's here vs --set'd from Terraform outputs.
+
+name: transaction-service
+port: 8082
+
+config:
+  SPRING_DATASOURCE_USERNAME: "flexhub"
+  SPRING_KAFKA_PROPERTIES_SECURITY_PROTOCOL: "SASL_SSL"
+  SPRING_KAFKA_PROPERTIES_SASL_MECHANISM: "PLAIN"
+
+envFromSecret:
+  - name: SPRING_DATASOURCE_PASSWORD
+    secretName: postgres-postgresql
+    key: password
+  - name: SPRING_KAFKA_PROPERTIES_SASL_JAAS_CONFIG
+    secretName: flexhub-secrets
+    key: eventhubs-jaas-config
+
+azureWorkloadIdentity:
+  enabled: true
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# transaction-service is the saga coordinator and the HPA target.
+hpa:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 60

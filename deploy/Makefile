@@ -1,4 +1,4 @@
-# Kubernetes workflow shortcuts for the flexhub stack on a local kind cluster.
+# Kubernetes workflow shortcuts for the flexhub stack — local (kind) + Azure (AKS).
 #
 # Run from repo root:   make -C deploy <target>
 # Or run any individual command shown below by hand.
@@ -16,9 +16,16 @@ POSTGRES_VALUES := $(REPO_ROOT)/infra/k8s/postgres-values.yaml
 KIND_CONFIG     := $(REPO_ROOT)/infra/k8s/kind-config.yaml
 CHART           := $(REPO_ROOT)/deploy/helm/flexhub-service
 VALUES_DIR      := $(REPO_ROOT)/deploy/helm/values
+AZURE_TF_DIR    := $(REPO_ROOT)/infra/azure
+AZURE_VALUES    := $(VALUES_DIR)/azure
+
+# Read these once per make invocation; lazy so `terraform output` only fires
+# when an aks-* target actually uses them.
+tf_output       = $(shell terraform -chdir=$(AZURE_TF_DIR) output -raw $(1))
 
 .PHONY: help kind-up load-images infra-install services-install services-helm-install install \
-        port-forward smoke-test status uninstall destroy
+        port-forward smoke-test status uninstall destroy \
+        aks-credentials aks-build-push aks-bootstrap-secrets aks-install aks-public-ip aks-uninstall
 
 help: ## Show this help.
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/{printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -67,3 +74,83 @@ uninstall: ## Helm-uninstall services + infra, keeping the cluster.
 
 destroy: ## Delete the entire kind cluster.
 	kind delete cluster --name $(CLUSTER)
+
+# ─── AKS targets ────────────────────────────────────────────────────────
+# All `aks-*` targets assume `terraform apply` in infra/azure has succeeded.
+# They read Terraform outputs to discover the ACR / Postgres / Event Hubs
+# / Key Vault names without hardcoding any.
+
+aks-credentials: ## Merge AKS credentials into kubeconfig (one-time per cluster).
+	@RG=$(call tf_output,resource_group_name); \
+	 NAME=flexhub-dev-aks; \
+	 az aks get-credentials --resource-group $$RG --name $$NAME --overwrite-existing
+
+aks-build-push: ## Build the four images for linux/amd64 (AKS nodes) and push to ACR.
+	@ACR=$(call tf_output,acr_login_server); \
+	 az acr login --name $${ACR%%.*}; \
+	 for svc in account-service transaction-service notification-service api-gateway; do \
+	   docker buildx build --platform linux/amd64 --push \
+	     -f $(REPO_ROOT)/services/$$svc/Dockerfile \
+	     -t $$ACR/flexhub/$$svc:latest \
+	     $(REPO_ROOT); \
+	 done
+
+aks-create-service-account: ## Create the shared flexhub-app ServiceAccount once. All four services then reference it.
+	@WI_CID=$(call tf_output,workload_identity_client_id); \
+	 kubectl apply -f - <<EOF
+	apiVersion: v1
+	kind: ServiceAccount
+	metadata:
+	  name: flexhub-app
+	  namespace: default
+	  labels:
+	    azure.workload.identity/use: "true"
+	  annotations:
+	    azure.workload.identity/client-id: "$$WI_CID"
+	EOF
+
+aks-install-postgres: ## helm-install bitnami/postgresql inside AKS. Workaround for free-trial Postgres Flexible Server restrictions.
+	helm upgrade --install postgres bitnami/postgresql --version 16.7.27 \
+	   -f $(REPO_ROOT)/infra/k8s/postgres-values.yaml
+	kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=postgresql --timeout=240s
+
+aks-bootstrap-secrets: ## Pull the Event Hubs JAAS connection string from Key Vault into a k8s Secret.
+	@KV=$(call tf_output,key_vault_name); \
+	 EH_CS=$$(az keyvault secret show --vault-name $$KV --name eventhubs-connection-string --query value -o tsv); \
+	 JAAS="org.apache.kafka.common.security.plain.PlainLoginModule required username=\"\$$ConnectionString\" password=\"$$EH_CS\";"; \
+	 kubectl create secret generic flexhub-secrets \
+	   --from-literal=eventhubs-jaas-config="$$JAAS" \
+	   --dry-run=client -o yaml | kubectl apply -f -
+
+aks-install: ## Helm-install the four services in AKS with terraform-output overrides.
+	@ACR=$(call tf_output,acr_login_server); \
+	 EH_BOOT=$(call tf_output,eventhubs_kafka_bootstrap); \
+	 WI_CID=$(call tf_output,workload_identity_client_id); \
+	 PG_BASE="jdbc:postgresql://postgres-postgresql:5432/flexhub?currentSchema"; \
+	 for svc in account-service transaction-service notification-service; do \
+	   schema=$$(echo $$svc | sed 's/-service$$//; s/account/accounts/; s/transaction/transactions/; s/notification/notifications/'); \
+	   helm upgrade --install $$svc $(CHART) -f $(AZURE_VALUES)/$$svc.yaml \
+	     --set image.repository=$$ACR/flexhub/$$svc \
+	     --set azureWorkloadIdentity.clientId=$$WI_CID \
+	     --set azureWorkloadIdentity.createServiceAccount=false \
+	     --set config.SPRING_DATASOURCE_URL="$$PG_BASE=$$schema" \
+	     --set config.SPRING_KAFKA_BOOTSTRAP_SERVERS=$$EH_BOOT ; \
+	 done; \
+	 helm upgrade --install api-gateway $(CHART) -f $(AZURE_VALUES)/api-gateway.yaml \
+	   --set image.repository=$$ACR/flexhub/api-gateway
+
+aks-public-ip: ## Print the api-gateway's external IP (wait for it if Pending).
+	@kubectl get svc api-gateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}{"\n"}' ; \
+	 echo "If empty, the LoadBalancer hasn't allocated an IP yet. Retry in 30s."
+
+aks-smoke-test: ## Run the golden-path + compensation saga against the AKS public IP.
+	@$(REPO_ROOT)/deploy/aks-smoke-test.sh
+
+aks-start: ## One-shot: terraform apply + all setup + helm install + report gateway IP (~25-35 min).
+	@$(REPO_ROOT)/deploy/aks-start.sh
+
+aks-uninstall: ## Helm-uninstall the four services + Postgres chart. Keeps the cluster + Azure infra.
+	-helm uninstall api-gateway notification-service transaction-service account-service
+	-helm uninstall postgres
+	-kubectl delete secret flexhub-secrets --ignore-not-found
+	-kubectl delete pvc -l app.kubernetes.io/name=postgresql

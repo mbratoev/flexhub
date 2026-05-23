@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (gitignored) and edit. Most defaults are fine;
+# override only what you need. terraform.tfvars takes precedence over
+# variables.tf defaults but loses to CLI -var flags.
+
+# location    = "germanywestcentral"   # default
+# name_prefix = "flexhub"              # default
+# environment = "dev"                  # default
