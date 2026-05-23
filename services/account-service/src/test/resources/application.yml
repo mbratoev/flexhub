@@ -1,0 +1,15 @@
+# Test-profile overrides. Kafka beans still load, but:
+#   - No real broker connection: listener auto-startup is off, KafkaAdmin tolerates missing broker.
+#   - OutboxRelay @Scheduled is pushed out so it doesn't fire during a test.
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+    listener:
+      auto-startup: false
+    admin:
+      fail-fast: false
+
+app:
+  outbox:
+    initial-delay-ms: 3600000   # 1h — relay won't run during a test
+    poll-delay-ms: 3600000

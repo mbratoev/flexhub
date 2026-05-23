@@ -1,0 +1,69 @@
+spring:
+  application:
+    name: account-service
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/flexhub?currentSchema=accounts
+    username: flexhub
+    password: flexhub
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate         # Flyway owns the schema — fail fast on drift
+    properties:
+      hibernate:
+        default_schema: accounts
+        format_sql: false
+
+  flyway:
+    enabled: true
+    schemas: accounts
+    default-schema: accounts
+    create-schemas: true                 # explicit — Flyway creates `accounts` if missing
+    init-sqls:                           # belt-and-braces: ensure schema exists before history table
+      - CREATE SCHEMA IF NOT EXISTS accounts
+    locations: classpath:db/migration
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      # group-id is overridden per @KafkaListener (one group per saga step).
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # ErrorHandlingDeserializer wraps the real deserializer. If JSON parsing fails (poison
+      # message), the failure becomes a recoverable header on the record rather than throwing
+      # — the listener container's error handler can then log + skip, instead of the consumer
+      # getting stuck retrying the same poison message forever.
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        spring.json.trusted.packages: "com.example.flexhub.events"
+        spring.json.use.type.headers: false
+        # The default value type is set per @KafkaListener via the `properties` attribute,
+        # since each listener consumes a different event type. No global default — a listener
+        # without an explicit type would fail loudly with a clear deserialization error.
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+server:
+  port: 8081
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operationsSorter: method
+  api-docs:
+    path: /v3/api-docs
