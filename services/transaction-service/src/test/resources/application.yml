@@ -1,0 +1,14 @@
+# Test profile: Kafka beans exist but listener doesn't auto-start and KafkaAdmin tolerates
+# no broker. OutboxRelay's @Scheduled is pushed way out so it doesn't fire during tests.
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+    listener:
+      auto-startup: false
+    admin:
+      fail-fast: false
+
+app:
+  outbox:
+    initial-delay-ms: 3600000   # 1h — the relay won't run during a test
+    poll-delay-ms: 3600000
