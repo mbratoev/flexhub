@@ -1,0 +1,187 @@
+# Local infrastructure + four services for the flexhub stack.
+# Run:    docker compose up -d
+# Stop:   docker compose down
+# Wipe:   docker compose down -v       (also removes volumes)
+#
+# What's here:
+#   - kafka     : Apache Kafka 3.9 in KRaft mode (no Zookeeper). Single broker.
+#   - kafka-ui  : Browser UI at http://localhost:8090 for inspecting topics/messages.
+#   - postgres  : PostgreSQL 16 with a separate schema per service.
+#                 Each service runs its own Flyway migrations into its own schema.
+
+services:
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: kafka
+    ports:
+      - "9092:9092"          # external host port — services on the host connect here
+    environment:
+      # --- KRaft mode (combined broker + controller in one process for local dev) ---
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+      # Two PLAINTEXT listeners:
+      #   - INTERNAL on :29092 advertised as kafka:29092 (other containers like kafka-ui use this)
+      #   - EXTERNAL on :9092  advertised as localhost:9092 (host JVMs from gradle bootRun use this)
+      # The CONTROLLER listener handles KRaft consensus only — not for clients.
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+
+      # Tiny single-broker dev settings (don't use these in production)
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"   # be explicit; services declare topics via NewTopic beans
+
+      # KRaft cluster bootstrap
+      CLUSTER_ID: flexhub-cluster
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: kafka-ui
+    ports:
+      - "8090:8080"     # browse at http://localhost:8090
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      DYNAMIC_CONFIG_ENABLED: "true"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: flexhub
+      POSTGRES_USER: flexhub
+      POSTGRES_PASSWORD: flexhub
+    volumes:
+      # Init script runs once on first start (empty data dir). Creates per-service schemas.
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flexhub -d flexhub"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ──────────────────────── application services ────────────────────────
+  # All four services build from their own Dockerfile with the repo root as build context.
+  # Environment variables override the per-service application.yml: Kafka and Postgres URLs
+  # point at the container DNS names (kafka:29092, postgres:5432) on the docker network.
+  # Each service exposes its port to the host for direct access during debugging; clients
+  # should normally hit only the gateway on :8080.
+
+  account-service:
+    build:
+      context: .
+      dockerfile: services/account-service/Dockerfile
+    container_name: account-service
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flexhub?currentSchema=accounts
+      SPRING_DATASOURCE_USERNAME: flexhub
+      SPRING_DATASOURCE_PASSWORD: flexhub
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8081/actuator/health/readiness || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  transaction-service:
+    build:
+      context: .
+      dockerfile: services/transaction-service/Dockerfile
+    container_name: transaction-service
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flexhub?currentSchema=transactions
+      SPRING_DATASOURCE_USERNAME: flexhub
+      SPRING_DATASOURCE_PASSWORD: flexhub
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8082/actuator/health/readiness || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: services/notification-service/Dockerfile
+    container_name: notification-service
+    ports:
+      - "8083:8083"
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flexhub?currentSchema=notifications
+      SPRING_DATASOURCE_USERNAME: flexhub
+      SPRING_DATASOURCE_PASSWORD: flexhub
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8083/actuator/health/readiness || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      # Each route URI points at the in-network service name + its container port.
+      ACCOUNT_SERVICE_URI: http://account-service:8081
+      TRANSACTION_SERVICE_URI: http://transaction-service:8082
+      NOTIFICATION_SERVICE_URI: http://notification-service:8083
+    depends_on:
+      account-service:
+        condition: service_healthy
+      transaction-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/actuator/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres_data:
