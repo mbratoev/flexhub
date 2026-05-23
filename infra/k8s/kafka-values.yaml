@@ -1,0 +1,68 @@
+# Bitnami Kafka chart values for our local learning cluster.
+#
+# Single-broker KRaft mode (no Zookeeper), no auth, in-cluster PLAINTEXT only.
+# This is the K8s equivalent of the compose `kafka` service.
+#
+# Install:    helm install kafka bitnami/kafka --version 32.4.3 -f infra/k8s/kafka-values.yaml
+# Uninstall:  helm uninstall kafka
+#
+# As of August 2025 Bitnami moved their production images behind a paid
+# Application Catalog subscription. The free community images live under
+# docker.io/bitnamilegacy/. We pin the legacy image explicitly and flip the
+# "allow insecure images" toggle that the chart now requires.
+global:
+  security:
+    allowInsecureImages: true
+
+image:
+  repository: bitnamilegacy/kafka
+  tag: 4.0.0-debian-12-r10
+
+# One combined controller+broker node. KRaft mode, no separate broker pool.
+controller:
+  replicaCount: 1
+  # Combined mode = controller + broker in one process (production would split).
+  controllerOnly: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  persistence:
+    enabled: true
+    size: 2Gi
+  # Single-broker overrides for system topics. Goes through the chart's
+  # `overrideConfiguration` field which the prepare-config init container
+  # appends to server.properties (env-var-based KAFKA_CFG_* only flows to
+  # the main container, too late to influence the on-disk config). Without
+  # RF=1 the internal __consumer_offsets topic defaults to RF=3 and never
+  # creates on a single broker, which silently wedges every consumer.
+  overrideConfiguration:
+    auto.create.topics.enable: "false"
+    offsets.topic.replication.factor: "1"
+    transaction.state.log.replication.factor: "1"
+    transaction.state.log.min.isr: "1"
+    default.replication.factor: "1"
+    min.insync.replicas: "1"
+
+# No separate broker pool (controllerOnly: false above means the controller node also brokers).
+broker:
+  replicaCount: 0
+
+# Disable all auth — our services connect with PLAINTEXT inside the cluster.
+listeners:
+  client:
+    protocol: PLAINTEXT
+  controller:
+    protocol: PLAINTEXT
+  interbroker:
+    protocol: PLAINTEXT
+  external:
+    protocol: PLAINTEXT
+
+sasl:
+  enabledMechanisms: ""
+  interBrokerMechanism: ""
+  controllerMechanism: ""

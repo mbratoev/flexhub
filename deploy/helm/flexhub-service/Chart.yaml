@@ -1,0 +1,9 @@
+apiVersion: v2
+name: flexhub-service
+description: |
+  Shared chart for the four flexhub application services. One chart, four
+  releases, one values file per release (deploy/helm/values/<service>.yaml).
+  Renders a Deployment + Service + ConfigMap; optionally an HPA.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

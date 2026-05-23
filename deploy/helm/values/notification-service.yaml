@@ -1,0 +1,17 @@
+# Release-specific values for notification-service.
+# Install:  helm install notification-service deploy/helm/flexhub-service -f deploy/helm/values/notification-service.yaml
+
+name: notification-service
+image:
+  repository: flexhub-notification-service
+port: 8083
+
+config:
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres-postgresql:5432/flexhub?currentSchema=notifications"
+  SPRING_DATASOURCE_USERNAME: "flexhub"
+
+envFromSecret:
+  - name: SPRING_DATASOURCE_PASSWORD
+    secretName: postgres-postgresql
+    key: password

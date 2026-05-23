@@ -1,0 +1,84 @@
+# Raw manifests for api-gateway.
+#
+# Gateway is reactive (Spring Cloud Gateway / WebFlux) and stateless — no DB,
+# no Kafka. Routes downstream by Service DNS names inside the cluster.
+#
+# Apply:    kubectl apply -f deploy/k8s/api-gateway.yaml
+# Reach:    kubectl port-forward svc/api-gateway 8080:8080
+#           curl http://localhost:8080/accounts/...
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-gateway-config
+  labels:
+    app: api-gateway
+data:
+  # Service DNS names — same shape as compose, just K8s Service names instead of
+  # compose container names. Cluster DNS resolves `account-service` to the ClusterIP.
+  ACCOUNT_SERVICE_URI: "http://account-service:8081"
+  TRANSACTION_SERVICE_URI: "http://transaction-service:8082"
+  NOTIFICATION_SERVICE_URI: "http://notification-service:8083"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  labels:
+    app: api-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+        - name: api-gateway
+          image: flexhub-api-gateway:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: api-gateway-config
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  labels:
+    app: api-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: api-gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

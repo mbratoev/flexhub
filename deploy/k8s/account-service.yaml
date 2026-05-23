@@ -1,0 +1,95 @@
+# Raw manifests for account-service. Equivalent to what the Helm chart renders.
+#
+# Apply:    kubectl apply -f deploy/k8s/account-service.yaml
+# Remove:   kubectl delete -f deploy/k8s/account-service.yaml
+#
+# Three objects (separated by `---`):
+#   ConfigMap   — non-secret env (Kafka + Postgres URLs)
+#   Deployment  — one replica running the container image, with probes + limits
+#   Service     — ClusterIP fronting the pod on port 8081
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: account-service-config
+  labels:
+    app: account-service
+data:
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres-postgresql:5432/flexhub?currentSchema=accounts"
+  SPRING_DATASOURCE_USERNAME: "flexhub"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: account-service
+  labels:
+    app: account-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: account-service
+  template:
+    metadata:
+      labels:
+        app: account-service
+    spec:
+      containers:
+        - name: account-service
+          # Loaded via `kind load docker-image flexhub-account-service:latest`.
+          # IfNotPresent so K8s uses the local image instead of trying docker.io.
+          image: flexhub-account-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: account-service-config
+          env:
+            # Bitnami's chart creates a Secret named `postgres-postgresql` with key `password`.
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-postgresql
+                  key: password
+          # /actuator/health/probes is enabled in application.yml.
+          # liveness = "JVM alive?" → restart on failure.
+          # readiness = "ready to serve?" → drop from Service endpoints on failure.
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: account-service
+  labels:
+    app: account-service
+spec:
+  type: ClusterIP
+  selector:
+    app: account-service
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http

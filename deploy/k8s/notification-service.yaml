@@ -1,0 +1,81 @@
+# Raw manifests for notification-service.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: notification-service-config
+  labels:
+    app: notification-service
+data:
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres-postgresql:5432/flexhub?currentSchema=notifications"
+  SPRING_DATASOURCE_USERNAME: "flexhub"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  labels:
+    app: notification-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: notification-service
+  template:
+    metadata:
+      labels:
+        app: notification-service
+    spec:
+      containers:
+        - name: notification-service
+          image: flexhub-notification-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8083
+          envFrom:
+            - configMapRef:
+                name: notification-service-config
+          env:
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-postgresql
+                  key: password
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+  labels:
+    app: notification-service
+spec:
+  type: ClusterIP
+  selector:
+    app: notification-service
+  ports:
+    - name: http
+      port: 8083
+      targetPort: http

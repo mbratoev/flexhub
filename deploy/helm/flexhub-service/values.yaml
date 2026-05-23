@@ -1,0 +1,78 @@
+# Defaults — every release should override `name`, `image.repository`, `port`,
+# and at least one of `config` / `envFromSecret`. See deploy/helm/values/*.yaml
+# for the per-service overrides.
+
+name: flexhub-service
+
+image:
+  repository: ""
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+port: 8080
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Probes hit Spring Boot Actuator endpoints exposed in each service's application.yml.
+probes:
+  liveness:
+    enabled: true
+    path: /actuator/health/liveness
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    failureThreshold: 6
+  readiness:
+    enabled: true
+    path: /actuator/health/readiness
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    failureThreshold: 6
+
+# Plain env vars, rendered into a ConfigMap and consumed via envFrom.
+config: {}
+
+# Env vars sourced from existing Secrets (e.g. bitnami's postgres-postgresql).
+# Each entry: { name, secretName, key }
+envFromSecret: []
+
+# Kubernetes Service type. ClusterIP for in-cluster only (default; kind setup).
+# LoadBalancer for external exposure (AKS: api-gateway only — Azure provisions
+# a public IP automatically).
+service:
+  type: ClusterIP
+
+# Azure Workload Identity. When enabled, renders a ServiceAccount annotated
+# with the managed-identity client_id and labels the pod template so the
+# workload-identity webhook injects an OIDC token. The pod then authenticates
+# to Azure resources (Key Vault, etc.) without static creds.
+#
+# Leave disabled for kind / local — falls back to the namespace's `default`
+# ServiceAccount with no Azure plumbing.
+azureWorkloadIdentity:
+  enabled: false
+  # When true, the chart creates the ServiceAccount as part of the release.
+  # When false (default for AKS), the SA is expected to exist already
+  # — created separately via kubectl manifest. Required when multiple chart
+  # releases in the same namespace share the SA, since Helm refuses to import
+  # a SA owned by a different release.
+  createServiceAccount: true
+  # Annotation value: the managed identity's client_id (uuid). From Terraform
+  # output `workload_identity_client_id`.
+  clientId: ""
+  # The ServiceAccount name. Must match the `subject` configured in the Azure
+  # federated credential (system:serviceaccount:<namespace>:<name>).
+  serviceAccountName: flexhub-app
+
+# Horizontal Pod Autoscaler — opt-in.
+hpa:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 60

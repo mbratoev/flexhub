@@ -1,0 +1,14 @@
+# Release-specific values for api-gateway.
+# Install:  helm install api-gateway deploy/helm/flexhub-service -f deploy/helm/values/api-gateway.yaml
+
+name: api-gateway
+image:
+  repository: flexhub-api-gateway
+port: 8080
+
+# Gateway is reactive (Spring Cloud Gateway / WebFlux) and stateless —
+# no DB, no Kafka, no secrets.
+config:
+  ACCOUNT_SERVICE_URI: "http://account-service:8081"
+  TRANSACTION_SERVICE_URI: "http://transaction-service:8082"
+  NOTIFICATION_SERVICE_URI: "http://notification-service:8083"

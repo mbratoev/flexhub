@@ -1,0 +1,26 @@
+# Release-specific values for transaction-service.
+# Install:  helm install transaction-service deploy/helm/flexhub-service -f deploy/helm/values/transaction-service.yaml
+
+name: transaction-service
+image:
+  repository: flexhub-transaction-service
+port: 8082
+
+config:
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres-postgresql:5432/flexhub?currentSchema=transactions"
+  SPRING_DATASOURCE_USERNAME: "flexhub"
+
+envFromSecret:
+  - name: SPRING_DATASOURCE_PASSWORD
+    secretName: postgres-postgresql
+    key: password
+
+# Only transaction-service scales horizontally — it's the saga's coordinator
+# and the natural CPU hot spot under load. The other services scale via
+# their own consumer-group partitions if needed; this exercises the HPA.
+hpa:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 60

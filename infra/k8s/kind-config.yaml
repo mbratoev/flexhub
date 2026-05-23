@@ -1,0 +1,16 @@
+# Local Kubernetes cluster for the flexhub project — 3-node kind cluster
+# (1 control plane + 2 workers).
+#
+# No extraPortMappings: external access goes through `kubectl port-forward`,
+# which keeps the setup symmetric with how we reach the gateway in AKS.
+#
+# Bring up:    kind create cluster --config infra/k8s/kind-config.yaml
+# Tear down:   kind delete cluster --name flexhub
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: flexhub
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

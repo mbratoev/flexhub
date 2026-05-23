@@ -1,0 +1,83 @@
+# Raw manifests for transaction-service.
+# See deploy/k8s/account-service.yaml for the per-field commentary; this
+# file is intentionally a close mirror, only the schema/port/image differ.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: transaction-service-config
+  labels:
+    app: transaction-service
+data:
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres-postgresql:5432/flexhub?currentSchema=transactions"
+  SPRING_DATASOURCE_USERNAME: "flexhub"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transaction-service
+  labels:
+    app: transaction-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: transaction-service
+  template:
+    metadata:
+      labels:
+        app: transaction-service
+    spec:
+      containers:
+        - name: transaction-service
+          image: flexhub-transaction-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8082
+          envFrom:
+            - configMapRef:
+                name: transaction-service-config
+          env:
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-postgresql
+                  key: password
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: transaction-service
+  labels:
+    app: transaction-service
+spec:
+  type: ClusterIP
+  selector:
+    app: transaction-service
+  ports:
+    - name: http
+      port: 8082
+      targetPort: http

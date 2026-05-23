@@ -1,0 +1,46 @@
+# Bitnami PostgreSQL chart values for our local learning cluster.
+#
+# K8s equivalent of the compose `postgres` service: one Postgres instance
+# with three per-service schemas (accounts, transactions, notifications).
+#
+# Install:    helm install postgres bitnami/postgresql --version 16.7.27 -f infra/k8s/postgres-values.yaml
+# Uninstall:  helm uninstall postgres
+#
+# Same Bitnami caveat as Kafka — pin to docker.io/bitnamilegacy/postgresql
+# since the bitnami namespace is now subscription-only.
+global:
+  security:
+    allowInsecureImages: true
+  postgresql:
+    auth:
+      username: flexhub
+      password: flexhub
+      database: flexhub
+
+image:
+  repository: bitnamilegacy/postgresql
+  tag: 17.6.0
+
+primary:
+  persistence:
+    enabled: true
+    size: 2Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+  # Mirror infra/postgres/init.sql — runs once when the data dir is empty.
+  initdb:
+    scripts:
+      01-init.sql: |
+        CREATE SCHEMA IF NOT EXISTS accounts;
+        CREATE SCHEMA IF NOT EXISTS transactions;
+        CREATE SCHEMA IF NOT EXISTS notifications;
+
+        GRANT USAGE, CREATE ON SCHEMA accounts      TO flexhub;
+        GRANT USAGE, CREATE ON SCHEMA transactions  TO flexhub;
+        GRANT USAGE, CREATE ON SCHEMA notifications TO flexhub;
