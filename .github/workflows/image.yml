@@ -1,0 +1,100 @@
+# Image build + push — runs AFTER CI succeeds on main, never concurrently with it.
+#
+# Trigger model: workflow_run gates this on the `CI` workflow finishing
+# successfully on main. We don't use `on: push: branches: [main]` directly
+# because that would let us publish images for a commit whose tests just
+# failed — fine for a learning project but the wrong default. workflow_run
+# only fires for workflows that completed on the default branch, so PR-CI
+# runs don't trigger this; only post-merge main CI does.
+#
+# We also keep workflow_dispatch so we can manually rebuild from the Actions
+# tab without having to ping CI.
+#
+# Pin: workflow_run fires with github.sha == the default-branch HEAD at
+# trigger time, which under rapid pushes may NOT equal the commit CI
+# verified. github.event.workflow_run.head_sha is the SHA CI actually ran
+# against — we check that branch out and tag images with that SHA so the
+# image tag truly corresponds to a green build.
+#
+# For each of the four application services, builds the Dockerfile and pushes
+# to GitHub Container Registry (ghcr.io) tagged with the verified commit SHA
+# AND `latest`. Pulled from kind / AKS at deploy time.
+#
+# Auth: GITHUB_TOKEN with packages:write — no PAT needed for ghcr.io as long
+# as the repository allows GitHub Actions to publish packages
+# (Settings → Actions → General → Workflow permissions → "Read and write").
+
+name: Build + push images
+
+on:
+  workflow_run:
+    workflows: [ "CI" ]      # matches the `name:` field in ci.yml
+    types: [ completed ]
+    branches: [ main ]
+  workflow_dispatch:         # manual trigger from the Actions tab
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: image-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    name: ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # workflow_run fires on completion regardless of CI's conclusion
+    # (success / failure / cancelled). Gate on success here; workflow_dispatch
+    # bypasses the check so manual reruns still work when CI is red.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - account-service
+          - transaction-service
+          - notification-service
+          - api-gateway
+
+    steps:
+      - name: Checkout the SHA CI verified
+        uses: actions/checkout@v4
+        with:
+          # Fall back to github.sha for workflow_dispatch (no workflow_run event).
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # owner-only-lowercase is required for ghcr.io — GitHub login `mbratoev`
+      # already lowercase, but enforcing the rule here keeps forks from breaking.
+      - name: Compute image name + SHA tag
+        id: meta
+        run: |
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+          echo "image=ghcr.io/${OWNER_LOWER}/flexhub/${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build + push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.sha }}
+            ${{ steps.meta.outputs.image }}:latest
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
