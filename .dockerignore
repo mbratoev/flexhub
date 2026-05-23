@@ -1,0 +1,40 @@
+# Gradle build output — rebuilt inside the container
+.gradle/
+build/
+**/build/
+**/.gradle/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+out/
+bin/
+
+# OS / Git
+.git/
+.gitignore
+.DS_Store
+Thumbs.db
+
+# Docs aren't needed for the build
+docs/
+*.md
+PLAN.md
+
+# Local infra config (kafka/postgres already running via compose)
+# but the postgres init script IS needed by docker compose (mounted as volume),
+# so don't ignore infra/
+
+# Tests aren't run in the container build, but their sources are needed
+# (gradle's :bootJar still pulls test classpath info during configuration).
+# Leave src/test/ alone.
+
+# Misc local state
+/tmp/
+*.log
+*.pid
+*.pdf
+.claude/
