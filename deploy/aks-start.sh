@@ -34,6 +34,9 @@ step() {
 
 step "1/7 — terraform apply (Azure infra; ~10-15 min)"
 cd "$REPO_ROOT/infra/azure"
+# init is idempotent — a fresh clone has no .terraform/, so apply alone would
+# fail with "provider ... no version is selected". Safe to run every time.
+terraform init -input=false
 terraform apply -auto-approve
 cd "$REPO_ROOT"
 

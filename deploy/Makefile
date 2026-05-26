@@ -95,19 +95,29 @@ aks-build-push: ## Build the four images for linux/amd64 (AKS nodes) and push to
 	     $(REPO_ROOT); \
 	 done
 
+# By default GNU Make invokes a new /bin/sh for every logical line of a recipe -> heredoc body feed fails
+# aks-create-service-account: ## Create the shared flexhub-app ServiceAccount once. All four services then reference it.
+# 	@WI_CID=$(call tf_output,workload_identity_client_id); \
+# 	 kubectl apply -f - <<EOF
+# 	apiVersion: v1
+# 	kind: ServiceAccount
+# 	metadata:
+# 	  name: flexhub-app
+# 	  namespace: default
+# 	  labels:
+# 	    azure.workload.identity/use: "true"
+# 	  annotations:
+# 	    azure.workload.identity/client-id: "$$WI_CID"
+# 	EOF
+
 aks-create-service-account: ## Create the shared flexhub-app ServiceAccount once. All four services then reference it.
 	@WI_CID=$(call tf_output,workload_identity_client_id); \
-	 kubectl apply -f - <<EOF
-	apiVersion: v1
-	kind: ServiceAccount
-	metadata:
-	  name: flexhub-app
-	  namespace: default
-	  labels:
-	    azure.workload.identity/use: "true"
-	  annotations:
-	    azure.workload.identity/client-id: "$$WI_CID"
-	EOF
+	 kubectl create serviceaccount flexhub-app -n default \
+	   --dry-run=client -o yaml | kubectl apply -f -; \
+	 kubectl label serviceaccount flexhub-app -n default \
+	   azure.workload.identity/use=true --overwrite; \
+	 kubectl annotate serviceaccount flexhub-app -n default \
+	   azure.workload.identity/client-id=$$WI_CID --overwrite
 
 aks-install-postgres: ## helm-install bitnami/postgresql inside AKS. Workaround for free-trial Postgres Flexible Server restrictions.
 	helm upgrade --install postgres bitnami/postgresql --version 16.7.27 \
